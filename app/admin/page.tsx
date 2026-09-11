@@ -1,79 +1,319 @@
+"use client";
+
 import Link from "next/link";
-import { Package, ClipboardList, Users, DollarSign, ArrowUpRight } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
+import { useState, useEffect, useMemo } from "react";
+import {
+  Package,
+  ClipboardList,
+  Users,
+  DollarSign,
+  ArrowUpRight,
+  ArrowDownRight,
+  Plus,
+  Search,
+  Edit,
+  Trash2,
+  Star,
+  Image as ImageIcon,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
+import { cn, formatPrice } from "@/lib/utils";
+import { useToast } from "@/components/toast";
+import { ConfirmModal } from "@/components/confirm-modal";
+import { createClient } from "@/lib/supabase/client";
 
-const STATS = [
-  { label: "Orders (30d)", icon: ClipboardList },
-  { label: "Revenue (30d)", icon: DollarSign },
-  { label: "Products", icon: Package },
-  { label: "Customers", icon: Users },
-];
-
-async function getCounts() {
-  try {
-    const supabase = createClient();
-    const [{ count: products }, { count: orders }, { count: customers }] = await Promise.all([
-      supabase.from("products").select("*", { count: "exact", head: true }),
-      supabase.from("orders").select("*", { count: "exact", head: true }),
-      supabase.from("customers").select("*", { count: "exact", head: true }),
-    ]);
-    return { products, orders, customers };
-  } catch {
-    return { products: null, orders: null, customers: null };
-  }
+interface Product {
+  id: string;
+  name: string;
+  slug: string;
+  sku: string;
+  price: number;
+  sale_price: number | null;
+  stock_qty: number;
+  is_published: boolean;
+  is_featured: boolean;
+  is_bestseller: boolean;
+  is_new: boolean;
+  brand: { name: string } | null;
+  category: { name: string; slug: string } | null;
+  created_at: string;
 }
 
-export default async function AdminDashboardPage() {
-  const counts = await getCounts();
-  const values: Record<string, number | null> = {
-    "Orders (30d)": counts.orders,
-    "Revenue (30d)": null, // requires an order-totals aggregate — wire up in Phase 4
-    Products: counts.products,
-    Customers: counts.customers,
+export default function AdminDashboard() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [sortField, setSortField] = useState<"name" | "price" | "stock_qty">("name");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  const [deleteModal, setDeleteModal] = useState<{ open: boolean; ids: string[] }>({ open: false, ids: [] });
+  const { toast } = useToast();
+
+  useEffect(() => {
+    fetchProducts();
+  }, []);
+
+  const fetchProducts = async () => {
+    setLoading(true);
+    try {
+      const supabase = createClient();
+      const { data, error } = await supabase
+        .from("products")
+        .select("id, name, slug, sku, price, sale_price, stock_qty, is_published, is_featured, is_bestseller, is_new, created_at, brand:brands(name), category:categories(name, slug)")
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error("Error fetching products:", error);
+        toast({ type: "error", title: "Failed to load products", description: error.message });
+      } else {
+        setProducts(data as unknown as Product[]);
+      }
+    } catch (err) {
+      console.error(err);
+      toast({ type: "error", title: "Failed to load products" });
+    }
+    setLoading(false);
+  };
+
+  const filteredProducts = useMemo(() => {
+    let result = [...products];
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          p.sku.toLowerCase().includes(q) ||
+          p.brand?.name?.toLowerCase().includes(q)
+      );
+    }
+    result.sort((a, b) => {
+      const aVal = a[sortField];
+      const bVal = b[sortField];
+      if (typeof aVal === "string" && typeof bVal === "string") {
+        return sortDir === "asc" ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+      }
+      return sortDir === "asc" ? (aVal as number) - (bVal as number) : (bVal as number) - (aVal as number);
+    });
+    return result;
+  }, [products, searchQuery, sortField, sortDir]);
+
+  const toggleSort = (field: "name" | "price" | "stock_qty") => {
+    if (sortField === field) setSortDir(sortDir === "asc" ? "desc" : "asc");
+    else { setSortField(field); setSortDir("asc"); }
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedProducts.size === filteredProducts.length) setSelectedProducts(new Set());
+    else setSelectedProducts(new Set(filteredProducts.map((p) => p.id)));
+  };
+
+  const toggleSelect = (id: string) => {
+    const next = new Set(selectedProducts);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    setSelectedProducts(next);
+  };
+
+  const handleDelete = async (ids: string[]) => {
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.from("products").delete().in("id", ids);
+      if (error) throw error;
+      toast({ type: "success", title: "Products deleted", description: `${ids.length} product(s) removed` });
+      setDeleteModal({ open: false, ids: [] });
+      setSelectedProducts(new Set());
+      fetchProducts();
+    } catch (err: any) {
+      toast({ type: "error", title: "Failed to delete", description: err.message });
+    }
+  };
+
+  const SortIcon = ({ field }: { field: string }) => {
+    if (sortField !== field) return <ChevronDown size={14} className="text-text-muted/50" />;
+    return sortDir === "asc" ? <ChevronUp size={14} className="text-jade" /> : <ChevronDown size={14} className="text-jade" />;
+  };
+
+  const stats = {
+    products: products.length,
+    orders: 0,
+    revenue: 0,
+    customers: 0,
   };
 
   return (
-    <div className="p-8">
-      <h1 className="text-2xl font-semibold">Dashboard</h1>
+    <div className="p-6 lg:p-8">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+        <div>
+          <h1 className="text-2xl font-bold text-text-primary">Dashboard</h1>
+          <p className="mt-1 text-sm text-text-muted">Welcome to your admin portal</p>
+        </div>
+        <Link href="/admin/products/new" className="inline-flex items-center gap-2 px-5 py-2.5 bg-ink text-text-onDark rounded-lg text-sm font-semibold hover:bg-jade transition">
+          <Plus size={16} />
+          Add Product
+        </Link>
+      </div>
 
-      <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {STATS.map((stat) => {
-          const Icon = stat.icon;
-          const value = values[stat.label];
-          return (
-            <div key={stat.label} className="rounded-md border border-line bg-white p-5">
-              <div className="flex items-center justify-between text-text-muted">
-                <span className="text-xs">{stat.label}</span>
-                <Icon size={16} strokeWidth={1.75} />
-              </div>
-              <p className="mt-3 text-2xl font-semibold">
-                {value === null ? "—" : value}
-              </p>
+      {/* Stats */}
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 mb-8">
+        <div className="p-5 rounded-xl border border-line bg-white">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-muted font-medium">Total Products</span>
+            <div className="w-9 h-9 rounded-lg bg-blue-100 flex items-center justify-center">
+              <Package size={18} className="text-blue-600" />
             </div>
-          );
-        })}
+          </div>
+          <p className="mt-3 text-2xl font-bold text-text-primary">{stats.products}</p>
+        </div>
+        <div className="p-5 rounded-xl border border-line bg-white">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-muted font-medium">Orders</span>
+            <div className="w-9 h-9 rounded-lg bg-emerald-100 flex items-center justify-center">
+              <ClipboardList size={18} className="text-emerald-600" />
+            </div>
+          </div>
+          <p className="mt-3 text-2xl font-bold text-text-primary">{stats.orders}</p>
+        </div>
+        <div className="p-5 rounded-xl border border-line bg-white">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-muted font-medium">Revenue</span>
+            <div className="w-9 h-9 rounded-lg bg-amber-100 flex items-center justify-center">
+              <DollarSign size={18} className="text-amber-600" />
+            </div>
+          </div>
+          <p className="mt-3 text-2xl font-bold text-text-primary">${stats.revenue}</p>
+        </div>
+        <div className="p-5 rounded-xl border border-line bg-white">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-text-muted font-medium">Customers</span>
+            <div className="w-9 h-9 rounded-lg bg-purple-100 flex items-center justify-center">
+              <Users size={18} className="text-purple-600" />
+            </div>
+          </div>
+          <p className="mt-3 text-2xl font-bold text-text-primary">{stats.customers}</p>
+        </div>
       </div>
 
-      <div className="mt-8 rounded-md border border-line bg-white p-6">
-        <p className="text-sm font-medium">Get started</p>
-        <ul className="mt-3 space-y-2 text-sm">
-          <li>
-            <Link href="/admin/categories" className="flex items-center gap-1.5 text-jade-dark hover:text-jade">
-              Create your first category <ArrowUpRight size={14} />
+      {/* Products Table */}
+      <div className="rounded-xl border border-line bg-white">
+        <div className="p-4 border-b border-line flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1 max-w-sm">
+            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search products..."
+              className="w-full pl-10 pr-4 py-2 rounded-lg border border-line text-sm focus:outline-none focus:border-jade transition"
+            />
+          </div>
+          {selectedProducts.size > 0 && (
+            <button
+              onClick={() => setDeleteModal({ open: true, ids: Array.from(selectedProducts) })}
+              className="px-3 py-2 rounded-lg bg-red-50 text-red-600 text-sm font-medium hover:bg-red-100 transition flex items-center gap-1.5"
+            >
+              <Trash2 size={14} />
+              Delete ({selectedProducts.size})
+            </button>
+          )}
+        </div>
+
+        {loading ? (
+          <div className="py-16 text-center">
+            <div className="w-8 h-8 border-2 border-jade border-t-transparent rounded-full animate-spin mx-auto" />
+            <p className="mt-2 text-sm text-text-muted">Loading products...</p>
+          </div>
+        ) : filteredProducts.length === 0 ? (
+          <div className="py-16 text-center">
+            <Package size={40} className="mx-auto text-text-muted mb-3" />
+            <p className="text-text-muted">No products found</p>
+            <Link href="/admin/products/new" className="text-sm text-jade hover:underline mt-2 inline-block">
+              Add your first product
             </Link>
-          </li>
-          <li>
-            <Link href="/admin/products/new" className="flex items-center gap-1.5 text-jade-dark hover:text-jade">
-              Add your first product <ArrowUpRight size={14} />
-            </Link>
-          </li>
-          <li>
-            <Link href="/admin/services" className="flex items-center gap-1.5 text-jade-dark hover:text-jade">
-              Publish your IT services <ArrowUpRight size={14} />
-            </Link>
-          </li>
-        </ul>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-line bg-paper/50">
+                  <th className="text-left px-4 py-3 w-10">
+                    <input
+                      type="checkbox"
+                      checked={selectedProducts.size === filteredProducts.length && filteredProducts.length > 0}
+                      onChange={toggleSelectAll}
+                      className="rounded"
+                    />
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider cursor-pointer" onClick={() => toggleSort("name")}>
+                    <span className="flex items-center gap-1">Product <SortIcon field="name" /></span>
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">SKU</th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider cursor-pointer" onClick={() => toggleSort("price")}>
+                    <span className="flex items-center gap-1">Price <SortIcon field="price" /></span>
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider cursor-pointer" onClick={() => toggleSort("stock_qty")}>
+                    <span className="flex items-center gap-1">Stock <SortIcon field="stock_qty" /></span>
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Status</th>
+                  <th className="text-right px-4 py-3 text-xs font-medium text-text-muted uppercase tracking-wider">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {filteredProducts.map((product) => (
+                  <tr key={product.id} className="hover:bg-paper/50 transition">
+                    <td className="px-4 py-3">
+                      <input type="checkbox" checked={selectedProducts.has(product.id)} onChange={() => toggleSelect(product.id)} className="rounded" />
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-lg border border-line bg-paper flex items-center justify-center shrink-0">
+                          <ImageIcon size={16} className="text-text-muted" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-text-primary line-clamp-1">{product.name}</p>
+                          <p className="text-xs text-text-muted">{product.brand?.name} · {product.category?.name}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-text-muted">{product.sku}</td>
+                    <td className="px-4 py-3">
+                      <span className="font-medium">{formatPrice(product.sale_price ?? product.price)}</span>
+                      {product.sale_price && <span className="ml-1 text-xs text-text-muted line-through">{formatPrice(product.price)}</span>}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={cn("font-medium", product.stock_qty <= 5 ? "text-amber-600" : "text-text-primary")}>{product.stock_qty}</span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={cn("px-2 py-0.5 rounded-full text-xs font-medium", product.is_published ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-600")}>
+                        {product.is_published ? "Published" : "Draft"}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        <Link href={`/admin/products/${product.id}`} className="p-1.5 rounded-md text-text-muted hover:text-jade hover:bg-jade/5 transition">
+                          <Edit size={14} />
+                        </Link>
+                        <button onClick={() => setDeleteModal({ open: true, ids: [product.id] })} className="p-1.5 rounded-md text-text-muted hover:text-red-500 hover:bg-red-50 transition">
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+
+      <ConfirmModal
+        open={deleteModal.open}
+        title="Delete Products"
+        description={`Are you sure you want to delete ${deleteModal.ids.length} product(s)? This action cannot be undone.`}
+        confirmLabel="Delete"
+        variant="danger"
+        onConfirm={() => handleDelete(deleteModal.ids)}
+        onCancel={() => setDeleteModal({ open: false, ids: [] })}
+      />
     </div>
   );
 }
