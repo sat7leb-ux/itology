@@ -1,4 +1,5 @@
 // Category images mapping - matches the website's dark/jade design aesthetic
+// Images are vibrant, tech-focused, and fill the entire box
 export const CATEGORY_IMAGES: Record<string, { url: string; alt: string }> = {
   computers: {
     url: 'https://images.unsplash.com/photo-1496181133206-80ce9b88a853?auto=format&fit=crop&w=800&q=80',
