@@ -1,10 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServerClient } from "@supabase/ssr";
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
-  // Only protect /admin routes (except /admin/login)
+  // Protect /admin routes except /admin/login
   if (pathname.startsWith("/admin") && !pathname.startsWith("/admin/login")) {
     const response = NextResponse.next();
     const supabase = createServerClient(
@@ -42,3 +41,9 @@ export async function middleware(request: NextRequest) {
 export const config = {
   matcher: ["/admin/:path*"],
 };
+
+function createServerClient(url: string, key: string, config: any) {
+  // Dynamic import to avoid issues
+  const { createServerClient: create } = require("@supabase/ssr");
+  return create(url, key, config);
+}
